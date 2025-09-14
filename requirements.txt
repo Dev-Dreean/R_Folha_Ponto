@@ -1,0 +1,6 @@
+fastapi
+uvicorn[standard]
+anyio
+PyMuPDF
+psutil
+python-multipart
