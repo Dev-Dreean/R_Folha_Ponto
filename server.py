@@ -7,6 +7,7 @@ from fastapi.staticfiles import StaticFiles
 from starlette.concurrency import run_in_threadpool
 import anyio
 import fitz  # PyMuPDF
+import concurrent.futures
 
 # ==== Config ====
 BASE_DIR = os.path.abspath(os.path.dirname(__file__))
@@ -917,9 +918,9 @@ async function runJob(files, metricOnly) {
                         countEl.textContent = `${fp.done}/${fp.total}`;
                         countEl.animate([
                             { transform:'scale(1)', color:'#0369a1' },
-                            { transform:'scale(1.28)', color:'#0ea5e9' },
+                            { transform:'scale(1.15)', color:'#0ea5e9' },
                             { transform:'scale(1)', color:'#0369a1' }
-                        ], { duration:260, easing:'ease-out' });
+                        ], { duration:220, easing:'ease-out' });
                         if(fp.done === fp.total){
                             countEl.classList.add('text-emerald-600','font-semibold');
                             countEl.animate([
