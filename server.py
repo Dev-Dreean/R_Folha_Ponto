@@ -155,9 +155,15 @@ def process_pdf_to_folder(src_pdf: str, out_dir: str, job_id: str, compress: boo
                     out_path = os.path.join(out_dir, f"{final}_{k}.pdf"); k+=1
                 out_doc = fitz.open()
                 out_doc.insert_pdf(doc, from_page=i, to_page=i)
-                # Otimização: Usar deflate, linear, clean e garbage=4 para reduzir tamanho
+                # Otimização: Usar deflate, clean e garbage=4; tentar linear se suportado,
+                # caso contrário, faz fallback sem linear (algumas versões do PyMuPDF
+                # não suportam linearisation e podem lançar erro).
                 if compress:
-                    pdf_bytes = out_doc.write(garbage=4, deflate=True, clean=True, linear=True)
+                    try:
+                        pdf_bytes = out_doc.write(garbage=4, deflate=True, clean=True, linear=True)
+                    except Exception:
+                        # Linearização não suportada — fallback seguro
+                        pdf_bytes = out_doc.write(garbage=4, deflate=True, clean=True)
                 else:
                     pdf_bytes = out_doc.write()
                 out_doc.close()
