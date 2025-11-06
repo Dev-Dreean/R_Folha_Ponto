@@ -4,3 +4,4 @@ anyio
 PyMuPDF
 psutil
 python-multipart
+Pillow

@@ -1,5 +1,5 @@
 # server.py
-import os, re, uuid, json, time, zipfile, asyncio, datetime, shutil
+import os, re, uuid, json, time, asyncio, shutil
 from typing import List, Dict, Any
 from fastapi import FastAPI, UploadFile, File, Form, WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse
@@ -7,7 +7,7 @@ from fastapi.staticfiles import StaticFiles
 from starlette.concurrency import run_in_threadpool
 import anyio
 import fitz  # PyMuPDF
-import concurrent.futures
+from zipfile import ZipFile, ZIP_DEFLATED
 
 # ==== Config ====
 BASE_DIR = os.path.abspath(os.path.dirname(__file__))
@@ -67,7 +67,8 @@ def extract_name(text_clean: str, text_raw: str | None = None) -> str | None:
 def sanitize_name_tokens(name: str) -> str | None:
     if not name: return None
     filtered = re.sub(r'[^A-ZÀ-Ý ]', ' ', name)
-    tokens = [t for t in filtered.split() if len(t) > 2 and t not in STOPWORDS]
+    # Permitir palavras com 2+ letras (incluindo DE, DA, DO, etc.)
+    tokens = [t for t in filtered.split() if len(t) >= 2 and t not in STOPWORDS]
     if len(tokens) < 2: return None
     return ' '.join(tokens[:6])
 
@@ -154,14 +155,19 @@ def process_pdf_to_folder(src_pdf: str, out_dir: str, job_id: str, compress: boo
                     out_path = os.path.join(out_dir, f"{final}_{k}.pdf"); k+=1
                 out_doc = fitz.open()
                 out_doc.insert_pdf(doc, from_page=i, to_page=i)
-                pdf_bytes = out_doc.write(garbage=4, deflate=True, clean=True) if compress else out_doc.write()
+                # Otimização: Usar deflate, linear, clean e garbage=4 para reduzir tamanho
+                if compress:
+                    pdf_bytes = out_doc.write(garbage=4, deflate=True, clean=True, linear=True)
+                else:
+                    pdf_bytes = out_doc.write()
                 out_doc.close()
                 with open(out_path, "wb") as f: f.write(pdf_bytes)
             emit_from_worker(job_id, "page_done", {"file": base, "page": i+1, "newName": final})
     return stats
 
 def make_zip(folder: str, zip_path: str):
-    with zipfile.ZipFile(zip_path, "w", compression=zipfile.ZIP_STORED) as zf:
+    # Otimização: Usar ZIP_DEFLATED com compresslevel=6 para melhor compressão
+    with ZipFile(zip_path, "w", compression=ZIP_DEFLATED, compresslevel=6) as zf:
         for root, _, files in os.walk(folder):
             for fn in files:
                 full = os.path.join(root, fn)
@@ -251,10 +257,6 @@ def index():
   .scrollbar-thin::-webkit-scrollbar{width:6px;}
   .scrollbar-thin::-webkit-scrollbar-thumb{background:#94a3b8;border-radius:3px;}
   .transition-all{transition:all 0.3s ease-in-out;}
-  @keyframes card-in { from { opacity: 0; transform: scale(0.95); } to { opacity: 1; transform: scale(1); } }
-  .card-animate-in { animation: card-in 0.3s ease-in-out forwards; }
-  .hidden-animated { opacity: 0; transform: scale(0.95); pointer-events: none; }
-  .visible-animated { opacity: 1; transform: scale(1); pointer-events: auto; }
 </style>
 </head>
 <body class="bg-slate-100 text-slate-900 text-[15px]">
@@ -291,22 +293,14 @@ def index():
       <div id="actionsContainer" style="max-height: 0; opacity: 0; padding-top: 0; margin-top: 0; border-top-width: 0;" class="overflow-hidden transition-all duration-500">
           <div class="grid gap-4 sm:grid-cols-3 items-center border-t pt-6">
                 <div class="flex flex-col gap-1 text-[11px] text-slate-600">
-                    <label class="inline-flex items-center gap-2 select-none cursor-pointer group">
-                        <input id="chkCompress" type="checkbox" class="accent-emerald-600 w-4 h-4 transition"/>
-                        <span class="font-medium group-hover:text-slate-900">Compactar PDF</span>
-                    </label>
-                    <div id="compressionDetails" class="hidden rounded-lg border border-slate-200 bg-slate-50 px-2 py-1.5 leading-tight">
-                        <div id="sizeLine" class="flex items-center flex-wrap gap-x-2 gap-y-1">
-                            <span class="text-slate-500">Tamanho:</span>
-                            <span id="rawSize" class="font-medium text-slate-700">--</span>
-                            <svg class="w-3 h-3 text-slate-400" viewBox="0 0 24 24" fill="currentColor"><path d="M12 5l7 7-7 7-1.4-1.4L15.2 13H5v-2h10.2L10.6 6.4 12 5z"/></svg>
-                            <span id="estSize" class="font-medium text-slate-700">--</span>
-                            <span id="gainBadge" class="px-1 py-0.5 rounded text-[10px] font-semibold hidden"></span>
-                        </div>
+                    <!-- Compressão é obrigatória - checkbox removido -->
+                    <div class="inline-flex items-center gap-2 px-3 py-2 rounded-lg bg-emerald-50 border border-emerald-200">
+                        <svg class="w-4 h-4 text-emerald-600" viewBox="0 0 24 24" fill="currentColor"><path d="M9 16.2L4.8 12l-1.4 1.4L9 19 21 7l-1.4-1.4L9 16.2z"/></svg>
+                        <span class="font-medium text-emerald-700 text-xs">Compressão Ativada</span>
                     </div>
                 </div>
                 <div class="hidden sm:block"></div>
-                                <div class="flex items-center justify-center sm:justify-end gap-1.5">
+                <div class="flex items-center justify-center sm:justify-end gap-1.5">
                             <button id="btnGo" class="btn-primary inline-flex items-center gap-2 rounded-xl bg-orange-500 px-4 py-2.5 text-white text-sm font-medium leading-none hover:bg-orange-600 shadow-sm">
                 <svg class="w-6 h-6" viewBox="0 0 24 24" fill="currentColor"><path d="M5.25 5.653c0-.856.917-1.398 1.665-.962l11.113 6.347a1.125 1.125 0 010 1.924L6.915 19.31a1.125 1.125 0 01-1.665-.962V5.653z"/></svg>
                 Executar
@@ -412,29 +406,20 @@ def index():
   </div>
 
 <script>
-// Estilos de mini-mode removidos (layout simplificado único)
 const $ = (s) => document.querySelector(s);
 // CORREÇÃO: Garante que todas as variáveis do modal de progresso sejam declaradas
 const fileInput = $("#file"), dropZone = $("#drop"), fileHint = $("#fileHint"), selectionBox = $("#selectionBox");
 const btnClear = $("#btnClear"), btnGo = $("#btnGo"), btnEscolher = $("#btnEscolher");
 const selectionTitle = $("#selectionTitle"), cardGroupsContainer = $("#cardGroupsContainer"), actionsContainer = $("#actionsContainer");
-const chkCompress = document.getElementById('chkCompress');
-const compressionDetails = document.getElementById('compressionDetails');
-const rawSizeEl = document.getElementById('rawSize');
-const estSizeEl = document.getElementById('estSize');
-const gainBadgeEl = document.getElementById('gainBadge');
-let compressionEnabled = false;
+// Compressão é sempre obrigatória
 const historyBox = $("#historyBox"), historyLinks = $("#historyLinks");
 const modal = $("#modal"), modalBackdrop = $("#modalBackdrop"), modalClose = $("#modalClose"), modalTitle = $("#modalTitle"), modalFrame = $("#modalFrame");
 const progressModal = $("#progressModal"), progressTitle = $("#progressTitle"), perFileProgressContainer = $("#perFileProgressContainer"), summaryContainer = $("#summaryContainer"), logDetails = $("#logDetails"), logContainer = $("#logContainer"), resultContainer = $("#resultContainer"), statusPulse = $("#statusPulse");
-// modal detalhes
 const detailsModal = document.getElementById('detailsModal');
 const detailsModalClose = document.getElementById('detailsModalClose');
 const detailsFiles = document.getElementById('detailsFiles');
 const detailsLogs = document.getElementById('detailsLogs');
 const clearLogsBtn = document.getElementById('clearLogs');
-// Componentes admin removidos
-// progressSpinner removido
 const immersiveProgress = document.getElementById('immersiveProgress');
 const circleRing = document.getElementById('circleRing');
 const circlePercent = document.getElementById('circlePercent');
@@ -443,20 +428,11 @@ const pagesTotalEl = document.getElementById('pagesTotal');
 const filesCountEl = document.getElementById('filesCount');
 const timeElapsedEl = document.getElementById('timeElapsed');
 const etaEl = document.getElementById('eta');
-// overlay de empacotamento
 const packagingOverlay = document.getElementById('packagingOverlay');
 let packagingShown = false;
-// spark removido
-
 let pickedFiles = [], activeModalUrl = null, filesProgress = {}, currentJobId = null, jobCancelled = false, cancelJobBtn = null;
-// Admin removido
 
 const bytesToSize = b => b < 1024 ? b + " B" : (b < 1048576 ? (b / 1024).toFixed(1) + " KB" : (b / 1048576).toFixed(1) + " MB");
-
-chkCompress?.addEventListener('change', ()=>{
-    compressionEnabled = chkCompress.checked;
-    updateSelectionUI();
-});
 
 function updateSelectionUI() {
     const count = pickedFiles.length;
@@ -468,29 +444,12 @@ function updateSelectionUI() {
         actionsContainer.style.opacity = 0;
         actionsContainer.style.paddingTop = 0;
         actionsContainer.style.borderTopWidth = 0;
-        compressionDetails?.classList.add('hidden');
     } else {
         fileHint.classList.add('hidden');
         actionsContainer.style.maxHeight = "500px"; 
         actionsContainer.style.opacity = 1;
         actionsContainer.style.paddingTop = "1.5rem";
         actionsContainer.style.borderTopWidth = "1px";
-        const totalBytes = pickedFiles.reduce((a,f)=>a+f.size,0);
-        if(totalBytes>0 && compressionEnabled){
-            const estimated = totalBytes*0.65;
-            rawSizeEl.textContent = bytesToSize(totalBytes);
-            estSizeEl.textContent = bytesToSize(estimated);
-            const percentGain = 100 - Math.round((estimated/totalBytes)*100);
-            if(gainBadgeEl){
-                gainBadgeEl.textContent = (percentGain>0?`-${percentGain}%`:`+${Math.abs(percentGain)}%`);
-                gainBadgeEl.classList.remove('hidden');
-                const positive = percentGain > 3; // threshold para valer a pena
-                gainBadgeEl.className = 'px-1 py-0.5 rounded text-[10px] font-semibold ' + (positive? 'bg-emerald-100 text-emerald-700':'bg-amber-100 text-amber-700');
-            }
-            compressionDetails.classList.remove('hidden');
-        } else {
-            compressionDetails?.classList.add('hidden');
-        }
     }
 }
 
@@ -707,36 +666,26 @@ modalBackdrop.onclick = () => {
     toggleModal(modal, false);
     toggleModal(progressModal, false);
 };
-// Handlers admin removidos
 
 async function runJob(files, metricOnly) {
-    console.log("--- INICIANDO NOVO TRABALHO ---");
     perFileProgressContainer.innerHTML = "";
     summaryContainer.innerHTML = "";
     summaryContainer.classList.add("hidden");
     logDetails.open = false;
     logDetails.querySelector('summary').innerHTML = "Ver logs detalhados";
-    // Exibir logs só para admin
     logDetails.style.display = 'none';
     progressTitle.textContent = metricOnly ? "Testando Desempenho..." : "Processando Arquivos...";
-    // spinner removido
-    // miniStats removido
     filesProgress = {};
     toggleModal(progressModal, true);
     immersiveProgress.classList.add('hidden');
-    // esconder botão toggleCompact se não admin
-    // toggleCompact removido
     circlePercent.textContent = '0%';
     circleRing.style.background = 'conic-gradient(#0284c7 0deg,#e2e8f0 0deg)';
     pagesDoneEl.textContent = '0';
     pagesTotalEl.textContent = '0';
     filesCountEl.textContent = '0';
     timeElapsedEl.textContent = '00:00';
-    // métricas removidas (avgRate, ETA)
     let globalTotalPages = 0; let globalDonePages = 0; let t0 = performance.now();
     let tickInterval = null;
-    // spark removido
-    function drawSpark(){}
     let lastPercentVal = -1;
     function updateVisual(){
         const now = performance.now();
@@ -765,14 +714,10 @@ async function runJob(files, metricOnly) {
             }
         }
         // mini stats (se mini-mode)
-    // miniStats removido
     }
 
-    // Layout: mini-mode se não admin
     const modalRoot = document.getElementById('progressModal');
     immersiveProgress.classList.add('hidden');
-    // grade varia conforme perfil
-    // agora lista compacta (linhas) em vez de grid cards
     perFileProgressContainer.className = 'flex-grow overflow-y-auto scrollbar-thin text-xs grid gap-y-0.5 gap-x-4' ;
     perFileProgressContainer.style.gridTemplateColumns = 'repeat(auto-fill,minmax(300px,1fr))';
         files.forEach(file => {
@@ -789,7 +734,8 @@ async function runJob(files, metricOnly) {
 
     const fd = new FormData();
     files.forEach(f => fd.append("files", f));
-    fd.append("compress_mode", compressionEnabled ? "true" : "false");
+    // Compressão é sempre obrigatória
+    fd.append("compress_mode", "true");
     fd.append("metric_only", metricOnly ? "true" : "false");
 
     let job_id = null;
@@ -832,8 +778,6 @@ async function runJob(files, metricOnly) {
 
     ws.onmessage = (ev) => {
         const msg = JSON.parse(ev.data);
-    // debug log removido (PEGA-BUG)
-        
     // Sanitização UNIFICADA: mesma regra usada na criação (colapsa blocos não alfanuméricos em underscore)
     const sanitizedFile = msg.data.file ? msg.data.file.replace(/[^A-Za-z0-9]+/g, '_') : '';
 
@@ -1141,9 +1085,10 @@ case "finished": {
 @app.post("/api/process")
 async def process_endpoint(
     files: List[UploadFile] = File(...),
-    compress_mode: str = Form("false"),
     metric_only: str = Form("false"),
 ):
+    # Compressão é sempre obrigatória
+    compress_mode = True
     job_id = uuid.uuid4().hex[:12]
     job_dir = os.path.join(DATA_DIR, job_id)
     in_dir  = os.path.join(job_dir, "in")
@@ -1173,7 +1118,7 @@ async def process_endpoint(
 
     JOBS[job_id] = {
         "dir": job_dir, "in": saved, "out": out_dir,
-        "compress_mode": (compress_mode.lower() == "true"),
+        "compress_mode": compress_mode,  # Sempre True - compressão obrigatória
         "metric_only": (metric_only.lower() == "true"),
         "total_pages": total_pages,
         "files_meta": files_meta,
